@@ -8,9 +8,11 @@ export default function Footer() {
         <div className="grid gap-10 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
           <div>
             <div className="flex items-center gap-2.5">
-              <span className="grid h-10 w-10 place-items-center rounded-2xl bg-ink text-cream text-lg font-black">
-                TS
-              </span>
+              <img
+                src="/oneworks-avatar-cat-256.svg"
+                alt="TypeSkillz logo"
+                className="h-10 w-10 rounded-2xl"
+              />
               <span className="text-lg font-extrabold tracking-tight">
                 TypeSkillz
               </span>

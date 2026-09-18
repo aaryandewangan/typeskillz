@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { TRACK_DEFS, TOTAL_LESSONS } from "@/lib/lessons";
 import { randomSentence } from "@/lib/paragraphs";
 import TypingEngine from "@/components/TypingEngine";
@@ -20,8 +20,12 @@ import {
 } from "lucide-react";
 
 export default function Home() {
-  const [demoText, setDemoText] = useState(randomSentence);
+  const [demoText, setDemoText] = useState("");
   const [demoKey, setDemoKey] = useState(0);
+
+  useEffect(() => {
+    setDemoText(randomSentence());
+  }, []);
 
   const refreshDemo = useCallback(() => {
     setDemoText(randomSentence());

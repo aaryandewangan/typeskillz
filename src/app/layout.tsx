@@ -1,10 +1,7 @@
 import type { Metadata } from "next";
 import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
-import FloatingNavbar from "@/components/FloatingNavbar";
-import Footer from "@/components/Footer";
-import { AuthProvider } from "@/components/AuthProvider";
-import { UserDataProvider } from "@/components/UserDataProvider";
+import ClientLayout from "@/components/ClientLayout";
 
 const display = Inter_Tight({
   variable: "--font-display",
@@ -22,6 +19,9 @@ export const metadata: Metadata = {
   title: "TypeSkillz — Learn Touch Typing Faster Than Ever",
   description:
     "The most advanced typing school: 2,395+ lessons, code typing, realtime races, 25 languages, 10 keyboard layouts, and analytics down to the finger.",
+  icons: {
+    icon: "/oneworks-avatar-cat-256.svg",
+  },
 };
 
 export default function RootLayout({
@@ -32,13 +32,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${display.variable} ${mono.variable} h-full`}>
       <body className="min-h-full flex flex-col bg-paper text-ink antialiased">
-        <AuthProvider>
-          <UserDataProvider>
-            <FloatingNavbar />
-            <div className="flex-1 pt-16 pb-28">{children}</div>
-            <Footer />
-          </UserDataProvider>
-        </AuthProvider>
+        <ClientLayout>{children}</ClientLayout>
       </body>
     </html>
   );

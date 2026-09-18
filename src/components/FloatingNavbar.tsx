@@ -220,9 +220,11 @@ export default function FloatingNavbar() {
       <header className="fixed inset-x-0 top-0 z-50">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-3">
           <Link href="/" className="group flex items-center gap-2.5">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-ink text-sm font-black text-cream transition-transform group-hover:-rotate-3">
-              TS
-            </span>
+            <img
+              src="/oneworks-avatar-cat-256.svg"
+              alt="TypeSkillz logo"
+              className="h-9 w-9 rounded-xl transition-transform group-hover:-rotate-3"
+            />
             <span className="text-[15px] font-extrabold tracking-tight hidden sm:block">
               TypeSkillz
             </span>
