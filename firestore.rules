@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{uid} {
+      allow read: if true;
+      allow create: if request.auth != null && request.auth.uid == uid;
+      allow update: if request.auth != null && request.auth.uid == uid;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    match /usernames/{username} {
+      allow read: if true;
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null
+                    && resource.data.uid == request.auth.uid;
+      allow update: if false;
+    }
+
+    match /rooms/{roomId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.host.uid == request.auth.uid;
+      allow update: if request.auth != null
+                    && (resource.data.host.uid == request.auth.uid
+                        || request.auth.uid in getPlayersUids(resource.data.players));
+      allow delete: if request.auth != null
+                    && resource.data.host.uid == request.auth.uid;
+
+      function getPlayersUids(players) {
+        return [
+          players[0].uid,
+          players[1].uid,
+          players[2].uid,
+          players[3].uid,
+          players[4].uid
+        ];
+      }
+    }
+
+    match /matchmaking/{ticketId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+  }
+}
