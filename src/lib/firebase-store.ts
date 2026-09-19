@@ -43,6 +43,7 @@ export interface UserProgress {
   results: TypingResult[];
   streak: { day: string; count: number };
   achievements: string[];
+  bestWpm: number;
   updatedAt: string;
 }
 
@@ -104,9 +105,11 @@ export async function saveResult(uid: string, result: TypingResult) {
     results: [],
     streak: { day: "", count: 0 },
     achievements: [],
+    bestWpm: 0,
   };
 
   const results = [...existing.results, result].slice(-2000);
+  const bestWpm = Math.max(existing.bestWpm ?? 0, result.wpm);
 
   // Update streak
   const today = new Date().toDateString();
@@ -123,6 +126,7 @@ export async function saveResult(uid: string, result: TypingResult) {
       results,
       streak: newStreak,
       achievements: existing.achievements,
+      bestWpm,
       updatedAt: new Date().toISOString(),
     },
   });
@@ -132,7 +136,12 @@ export async function getProgress(uid: string): Promise<UserProgress | null> {
   const snap = await getDoc(doc(db, "users", uid));
   if (!snap.exists()) return null;
   const data = snap.data();
-  return (data.progress as UserProgress) ?? null;
+  const progress = (data.progress as UserProgress) ?? null;
+  if (progress && progress.bestWpm === undefined) {
+    const results = progress.results ?? [];
+    progress.bestWpm = results.length > 0 ? Math.max(...results.map((r) => r.wpm)) : 0;
+  }
+  return progress;
 }
 
 /* ── Leaderboard ────────────────────────────────────────────────────── */
@@ -148,6 +157,7 @@ export async function getLeaderboard(
 ): Promise<LeaderboardEntry[]> {
   const q = query(
     collection(db, "users"),
+    where("progress.bestWpm", ">", 0),
     orderBy("progress.bestWpm", "desc"),
     limit(count)
   );
@@ -155,15 +165,37 @@ export async function getLeaderboard(
   return snap.docs.map((d) => {
     const data = d.data();
     const progress = data.progress as UserProgress | undefined;
-    const results = progress?.results ?? [];
-    const bestWpm = results.length > 0
-      ? Math.max(...results.map((r) => r.wpm))
-      : 0;
+    const bestWpm = progress?.bestWpm ?? 0;
     return {
       uid: data.uid,
       displayName: data.displayName ?? "Anonymous",
       bestWpm,
     };
+  });
+}
+
+export function listenLeaderboard(
+  count = 20,
+  callback: (entries: LeaderboardEntry[]) => void
+): () => void {
+  const q = query(
+    collection(db, "users"),
+    where("progress.bestWpm", ">", 0),
+    orderBy("progress.bestWpm", "desc"),
+    limit(count)
+  );
+  return onSnapshot(q, (snap) => {
+    const entries = snap.docs.map((d) => {
+      const data = d.data();
+      const progress = data.progress as UserProgress | undefined;
+      const bestWpm = progress?.bestWpm ?? 0;
+      return {
+        uid: data.uid,
+        displayName: data.displayName ?? "Anonymous",
+        bestWpm,
+      };
+    });
+    callback(entries);
   });
 }
 
@@ -181,6 +213,7 @@ export interface RoomPlayer {
   combo?: number;
   lives?: number;
   done?: boolean;
+  doneCount?: number;
 }
 
 export interface Room {
@@ -282,6 +315,25 @@ export async function setAllReady(docId: string, ready: boolean): Promise<void> 
 }
 
 export async function startCountdown(docId: string): Promise<void> {
+  await updateDoc(doc(db, "rooms", docId), {
+    status: "countdown",
+    countdownStart: Date.now(),
+  });
+}
+
+export async function setRoomRacing(docId: string): Promise<void> {
+  await updateDoc(doc(db, "rooms", docId), {
+    status: "racing",
+  });
+}
+
+export async function setRoomFinished(docId: string, winnerUid?: string): Promise<void> {
+  const update: Record<string, unknown> = { status: "finished" };
+  if (winnerUid) update.winner = winnerUid;
+  await updateDoc(doc(db, "rooms", docId), update);
+}
+
+export async function autoStartOnline(docId: string): Promise<void> {
   await updateDoc(doc(db, "rooms", docId), {
     status: "countdown",
     countdownStart: Date.now(),

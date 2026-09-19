@@ -1,21 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Trophy, Zap, ArrowLeft } from "lucide-react";
+import { Trophy, Zap, ArrowLeft, TrendingUp, TrendingDown } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import SignInGate from "@/components/SignInGate";
 import GameModeSelector from "@/components/GameModeSelector";
 import MultiplayerRace from "@/components/MultiplayerRace";
+import { recordSoloResult, getRankData, type GameRank } from "@/lib/rank-store";
+import GameLeaderboard from "@/components/GameLeaderboard";
 
 const BOT_TEXT = "speed is a habit built one clean keystroke at a time so stay calm and let your fingers dance";
 
 function SoloRace({ text }: { text: string }) {
+  const { user } = useAuth();
   const [started, setStarted] = useState(false);
   const [input, setInput] = useState("");
   const [t0, setT0] = useState(0);
   const [now, setNow] = useState(0);
+  const [finishMs, setFinishMs] = useState(0);
+  const [rankResult, setRankResult] = useState<{ won: boolean; pts: number; rank: GameRank } | null>(null);
+  const rankRecordedRef = useRef(false);
   const bots = useMemo(
     () => [
       { name: "Tappy", wpm: 31, color: "#0aa63f" },
@@ -32,17 +38,33 @@ function SoloRace({ text }: { text: string }) {
     return () => clearInterval(t);
   }, [started, done]);
 
-  const elapsedMin = started
-    ? Math.max(1 / 600, (done ? 0 : now - t0) / 60000 || 0.001)
-    : 0.001;
+  useEffect(() => {
+    if (done && t0 > 0 && finishMs === 0) {
+      setFinishMs(Date.now());
+    }
+  }, [done, t0, finishMs]);
+
+  const elapsedMs = started
+    ? (done ? (finishMs > 0 ? finishMs - t0 : now - t0) : now - t0)
+    : 0;
+  const elapsedMin = Math.max(elapsedMs / 60000, 1 / 600);
   const correct = input.split("").filter((c, i) => c === text[i]).length;
-  const myWpm = started ? Math.round(correct / 5 / elapsedMin) : 0;
+  const myWpm = started && elapsedMin > 0 ? Math.round(correct / 5 / elapsedMin) : 0;
   const myProg = (input.length / text.length) * 100;
   const botProg = (b: number) => {
     if (!started) return 0;
     const secs = (now - t0) / 1000;
     return Math.min(100, ((b / 60) * 5 * secs / text.length) * 100);
   };
+
+  useEffect(() => {
+    if (!done || !user || rankRecordedRef.current || myWpm === 0) return;
+    rankRecordedRef.current = true;
+    const won = myWpm >= 31; // Beat at least Tappy
+    recordSoloResult(user.uid, "race", won).then((r) => {
+      setRankResult({ won, pts: r.pts, rank: r.rank });
+    }).catch(() => {});
+  }, [done, user, myWpm]);
 
   return (
     <div className="rounded-[24px] border border-hairline bg-white p-6 shadow-card">
@@ -96,12 +118,26 @@ function SoloRace({ text }: { text: string }) {
         placeholder={started ? "Type here to race..." : "Hit Start race, then type here"}
         className="mt-3 w-full rounded-full border border-hairline bg-paper px-5 py-3 font-mono outline-none focus:border-ink disabled:opacity-50" />
       {done && (
-        <p className="mt-2 font-bold flex items-center gap-2">
-          <Trophy size={16} className="text-tang" />
-          Finished at ~{myWpm} WPM.{" "}
-          {myWpm >= 82 ? "You beat Blaze!" : myWpm >= 58 ? "You beat Dash!" : myWpm >= 31 ? "You beat Tappy!" : "The bots win this time."}{" "}
-          <Link href="/learn/speed-builders" className="underline">Train speed</Link>
-        </p>
+        <div className="mt-2">
+          <p className="font-bold flex items-center gap-2">
+            <Trophy size={16} className="text-tang" />
+            Finished at ~{myWpm} WPM.{" "}
+            {myWpm >= 82 ? "You beat Blaze!" : myWpm >= 58 ? "You beat Dash!" : myWpm >= 31 ? "You beat Tappy!" : "The bots win this time."}{" "}
+            <Link href="/learn/speed-builders" className="underline">Train speed</Link>
+          </p>
+          {rankResult && (
+            <div className="mt-2 flex items-center gap-3">
+              <span className={`flex items-center gap-1 font-bold text-[14px] ${rankResult.pts >= 0 ? "text-brand" : "text-rose"}`}>
+                {rankResult.pts >= 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+                {rankResult.pts >= 0 ? "+" : ""}{rankResult.pts} pts
+              </span>
+              <span className="text-muted text-[12px]">·</span>
+              <span className="font-bold text-[13px]" style={{ color: getRankData(rankResult.rank.rank).color }}>
+                {getRankData(rankResult.rank.rank).icon} {getRankData(rankResult.rank.rank).label} — {rankResult.rank.points} pts
+              </span>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -127,7 +163,7 @@ export default function RacePage() {
       </p>
 
       {mode === "select" ? (
-        <div className="mt-6">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_380px]">
           <GameModeSelector
             game="race"
             color="#0aa63f"
@@ -138,6 +174,10 @@ export default function RacePage() {
               setMode("playing");
             }}
           />
+          <div className="space-y-6">
+            <GameLeaderboard game="race" color="#0aa63f" compact title="Solo Leaderboard" />
+            <GameLeaderboard game="race_online" color="#5f58e8" compact title="Online Leaderboard" />
+          </div>
         </div>
       ) : (
         <div className="mt-6">

@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { useEffect, useCallback, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Trophy, Swords } from "lucide-react";
+import { ArrowLeft, Trophy, Swords, TrendingUp, TrendingDown } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import SignInGate from "@/components/SignInGate";
 import { listenToRoom, updatePlayerExtendedProgress, deleteRoom, type Room } from "@/lib/firebase-store";
 import GameModeSelector from "@/components/GameModeSelector";
+import GameLeaderboard from "@/components/GameLeaderboard";
+import { recordMatchResult, recordSoloResult, getRankData, calculatePointsChange, type GameRank } from "@/lib/rank-store";
 
 const FALLING_WORDS = [
   "apple","ocean","plane","river","light","paper","dance","flame","glass","solar",
@@ -17,6 +19,7 @@ const FALLING_WORDS = [
 type Word = { id: number; text: string; y: number };
 
 function SoloWordFall({ text }: { text: string }) {
+  const { user } = useAuth();
   const words = text.split(" ");
   const [queue, setQueue] = useState<string[]>([...words, ...FALLING_WORDS]);
   const [falling, setFalling] = useState<Word[]>([]);
@@ -27,6 +30,8 @@ function SoloWordFall({ text }: { text: string }) {
   const [lives, setLives] = useState(3);
   const [started, setStarted] = useState(false);
   const [done, setDone] = useState(false);
+  const [rankResult, setRankResult] = useState<{ won: boolean; pts: number; rank: GameRank } | null>(null);
+  const rankRecordedRef = useRef(false);
   const idRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -82,6 +87,18 @@ function SoloWordFall({ text }: { text: string }) {
 
   const gameState = started && lives > 0 && !done;
 
+  useEffect(() => {
+    if ((done || lives <= 0) && !rankRecordedRef.current) {
+      rankRecordedRef.current = true;
+      const won = lives > 0 && score > 0;
+      if (user) {
+        recordSoloResult(user.uid, "word-fall", won).then((r) => {
+          setRankResult({ won, pts: r.pts, rank: r.rank });
+        }).catch(() => {});
+      }
+    }
+  }, [done, lives, score, user]);
+
   return (
     <div className="rounded-[24px] border border-hairline bg-white p-6 shadow-card">
       <div className="flex items-center justify-between">
@@ -126,11 +143,33 @@ function SoloWordFall({ text }: { text: string }) {
         {lives <= 0 && (
           <div className="absolute inset-0 grid place-items-center bg-white/90 z-20">
             <p className="text-[18px] font-extrabold">Game over! Score {score}</p>
+            {rankResult && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className={`flex items-center gap-1 font-bold text-[14px] ${rankResult.pts >= 0 ? "text-brand" : "text-rose"}`}>
+                  {rankResult.pts >= 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+                  {rankResult.pts >= 0 ? "+" : ""}{rankResult.pts} pts
+                </span>
+                <span className="font-bold text-[13px]" style={{ color: getRankData(rankResult.rank.rank).color }}>
+                  {getRankData(rankResult.rank.rank).icon} {getRankData(rankResult.rank.rank).label}
+                </span>
+              </div>
+            )}
           </div>
         )}
         {done && (
           <div className="absolute inset-0 grid place-items-center bg-white/90 z-20">
             <p className="text-[18px] font-extrabold flex items-center gap-2"><Trophy size={18} className="text-tang" /> All done! Score {score}</p>
+            {rankResult && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className={`flex items-center gap-1 font-bold text-[14px] ${rankResult.pts >= 0 ? "text-brand" : "text-rose"}`}>
+                  {rankResult.pts >= 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+                  {rankResult.pts >= 0 ? "+" : ""}{rankResult.pts} pts
+                </span>
+                <span className="font-bold text-[13px]" style={{ color: getRankData(rankResult.rank.rank).color }}>
+                  {getRankData(rankResult.rank.rank).icon} {getRankData(rankResult.rank.rank).label}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -172,7 +211,7 @@ export default function WordFallPage() {
       </p>
 
       {mode === "select" ? (
-        <div className="mt-6">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_380px]">
           <GameModeSelector
             game="word-fall"
             color="#0aa63f"
@@ -183,6 +222,10 @@ export default function WordFallPage() {
               setMode("playing");
             }}
           />
+          <div className="space-y-6">
+            <GameLeaderboard game="word-fall" color="#0aa63f" compact title="Solo Leaderboard" />
+            <GameLeaderboard game="word-fall_online" color="#5f58e8" compact title="Online Leaderboard" />
+          </div>
         </div>
       ) : (
         <div className="mt-6">
@@ -222,6 +265,37 @@ function MultiplayerWordFall({ text, room, onExit }: { text: string; room: Room 
   const inputRef = useRef<HTMLInputElement>(null);
 
   const opponents = room?.players.filter((p) => p.uid !== user?.uid) ?? [];
+
+  const [matchResult, setMatchResult] = useState<{ won: boolean; pts: number; rank: GameRank } | null>(null);
+  const matchRecordedRef = useRef(false);
+
+  // Record match when game ends
+  useEffect(() => {
+    if (!room || !user || matchRecordedRef.current) return;
+    const gameOver = room.status === "finished";
+    if (!gameOver) return;
+
+    matchRecordedRef.current = true;
+    const opponents = room.players.filter((p) => p.uid !== user.uid);
+    if (opponents.length > 0) {
+      const opp = opponents[0];
+      const myScore = score;
+      const oppScore = (opp as any).score ?? 0;
+      const won = myScore >= oppScore;
+      recordMatchResult(user.uid, (room.mode || "word-fall") + "_online", won, opp.uid).then((rank) => {
+        const pts = calculatePointsChange(rank.rank, getRankData(rank.rank).id, won);
+        setMatchResult({ won, pts, rank });
+      }).catch(() => {});
+    }
+  }, [room?.status, user, room, score]);
+
+  // Auto-start from room status
+  useEffect(() => {
+    if (room?.status === "racing" && !started) {
+      setStarted(true);
+      inputRef.current?.focus();
+    }
+  }, [room?.status, started]);
 
   const spawn = useCallback(() => {
     setQueue((q) => {
@@ -279,7 +353,13 @@ function MultiplayerWordFall({ text, room, onExit }: { text: string; room: Room 
         <h3 className="text-xl font-extrabold flex items-center gap-2">
           <Swords size={20} className="text-brand" /> Word Fall ({opponents.length + 1} players)
         </h3>
-        <button onClick={onExit} className="pill-btn border border-hairline px-5 py-2.5 font-bold">Exit</button>
+        <div className="flex items-center gap-2">
+          {!started && room?.status !== "countdown" && (
+            <button onClick={() => { setStarted(true); inputRef.current?.focus(); }}
+              className="pill-btn bg-brand px-5 py-2.5 font-bold text-white">Start</button>
+          )}
+          <button onClick={onExit} className="pill-btn border border-hairline px-5 py-2.5 font-bold">Exit</button>
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div className="rounded-2xl bg-paper border border-hairline p-3">

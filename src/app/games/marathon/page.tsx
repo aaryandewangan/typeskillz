@@ -3,17 +3,20 @@
 import Link from "next/link";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Trophy, BookOpen, CheckCircle } from "lucide-react";
+import { ArrowLeft, Trophy, BookOpen, CheckCircle, TrendingUp, TrendingDown } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import SignInGate from "@/components/SignInGate";
 import GameModeSelector from "@/components/GameModeSelector";
 import { listenToRoom, updatePlayerExtendedProgress, type Room } from "@/lib/firebase-store";
 import { useUserData } from "@/lib/useUserData";
 import { PARAGRAPHS, getParagraph } from "@/lib/paragraphs";
+import GameLeaderboard from "@/components/GameLeaderboard";
+import { recordMatchResult, recordSoloResult, getRankData, calculatePointsChange, type GameRank } from "@/lib/rank-store";
 
 const PARA_COUNT = PARAGRAPHS.length;
 
 function SoloMarathon() {
+  const { user } = useAuth();
   const { saveResult } = useUserData();
   const [idx, setIdx] = useState(0);
   const [input, setInput] = useState("");
@@ -23,6 +26,8 @@ function SoloMarathon() {
   const [keystrokes, setKeystrokes] = useState(0);
   const [doneCount, setDoneCount] = useState(0);
   const [weakKeys, setWeakKeys] = useState<Record<string, number>>({});
+  const [rankResult, setRankResult] = useState<{ won: boolean; pts: number; rank: GameRank } | null>(null);
+  const rankRecordedRef = useRef(false);
   const startRef = useRef(0);
   const para = getParagraph(idx).text;
   const totalLen = PARAGRAPHS.reduce((s, p) => s + p.text.length, 0);
@@ -33,8 +38,8 @@ function SoloMarathon() {
     if (startRef.current === 0 && input.length > 0) startRef.current = Date.now();
   }, [input]);
 
-  const finishPara = useCallback((text: string) => {
-    const correct = text.split("").filter((c, i) => c === text[i]).length;
+  const finishPara = useCallback((text: string, currentInput: string) => {
+    const correct = currentInput.split("").filter((c, i) => c === text[i]).length;
     setCorrect((p) => p + correct);
     setWrong((p) => p + (text.length - correct));
     setKeystrokes((p) => p + text.length);
@@ -60,8 +65,16 @@ function SoloMarathon() {
         at: new Date().toISOString(),
         weakKeys: Object.keys(weakKeys).length > 0 ? Object.entries(weakKeys).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k]) => k) : [],
       }).catch(() => {});
+
+      if (user && !rankRecordedRef.current) {
+        rankRecordedRef.current = true;
+        const won = wpm >= 30 && accuracy >= 80;
+        recordSoloResult(user.uid, "marathon", won).then((r) => {
+          setRankResult({ won, pts: r.pts, rank: r.rank });
+        }).catch(() => {});
+      }
     }
-  }, [idx, saveResult, weakKeys]);
+  }, [idx, saveResult, weakKeys, user]);
 
   return (
     <div className="rounded-[24px] border border-hairline bg-white p-6 shadow-card">
@@ -92,12 +105,31 @@ function SoloMarathon() {
         )}
       </p>
 
+      {rankResult && (
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+          className="mt-3 rounded-2xl bg-nested p-4 text-center">
+          <p className="font-extrabold text-[16px]">
+            {rankResult.won ? "Great run!" : "Keep practicing!"}
+          </p>
+          <div className="mt-2 flex items-center justify-center gap-3">
+            <span className={`flex items-center gap-1 font-bold text-[15px] ${rankResult.pts >= 0 ? "text-brand" : "text-rose"}`}>
+              {rankResult.pts >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+              {rankResult.pts >= 0 ? "+" : ""}{rankResult.pts} pts
+            </span>
+            <span className="text-muted text-[13px]">·</span>
+            <span className="font-bold text-[13px]" style={{ color: getRankData(rankResult.rank.rank).color }}>
+              {getRankData(rankResult.rank.rank).icon} {getRankData(rankResult.rank.rank).label} — {rankResult.rank.points} pts
+            </span>
+          </div>
+        </motion.div>
+      )}
+
       {!done && (
         <input autoFocus value={input} onChange={(e) => {
           const val = e.target.value;
           if (val.length > para.length) return;
           setInput(val);
-          if (val.length === para.length) finishPara(para);
+          if (val.length === para.length) finishPara(para, val);
         }} placeholder="Type this paragraph, then press Next…"
           className="mt-3 w-full rounded-full border border-hairline bg-paper px-5 py-3 font-mono outline-none focus:border-ink" />
       )}
@@ -133,7 +165,7 @@ export default function MarathonPage() {
       </p>
 
       {mode === "select" ? (
-        <div className="mt-6">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_380px]">
           <GameModeSelector
             game="marathon"
             color="#ff8709"
@@ -143,6 +175,10 @@ export default function MarathonPage() {
               setMode("playing");
             }}
           />
+          <div className="space-y-6">
+            <GameLeaderboard game="marathon" color="#ff8709" compact title="Solo Leaderboard" />
+            <GameLeaderboard game="marathon_online" color="#5f58e8" compact title="Online Leaderboard" />
+          </div>
         </div>
       ) : (
         <div className="mt-6">
@@ -173,17 +209,48 @@ function MultiplayerMarathon({ room, onExit }: { room: Room | null; onExit: () =
   const [done, setDone] = useState(false);
   const [correctChars, setCorrect] = useState(0);
   const [weakKeys, setWeakKeys] = useState<Record<string, number>>({});
+  const [started, setStarted] = useState(false);
   const startRef = useRef(0);
   const para = room?.text ?? getParagraph(idx).text;
   const opponents = room?.players.filter((p) => p.uid !== user?.uid) ?? [];
   const me = room?.players.find((p) => p.uid === user?.uid);
 
+  const [matchResult, setMatchResult] = useState<{ won: boolean; pts: number; rank: GameRank } | null>(null);
+  const matchRecordedRef = useRef(false);
+
+  // Record match when game ends
+  useEffect(() => {
+    if (!room || !user || matchRecordedRef.current) return;
+    const gameOver = room.status === "finished";
+    if (!gameOver) return;
+
+    matchRecordedRef.current = true;
+    const opps = room.players.filter((p) => p.uid !== user.uid);
+    if (opps.length > 0) {
+      const opp = opps[0];
+      const myCount = me?.doneCount ?? 0;
+      const oppCount = (opp as any).doneCount ?? 0;
+      const won = myCount >= oppCount;
+      recordMatchResult(user.uid, (room.mode || "marathon") + "_online", won, opp.uid).then((rank) => {
+        const pts = calculatePointsChange(rank.rank, getRankData(rank.rank).id, won);
+        setMatchResult({ won, pts, rank });
+      }).catch(() => {});
+    }
+  }, [room?.status, user, room]);
+
+  // Auto-start from room status
+  useEffect(() => {
+    if (room?.status === "racing" && !started) {
+      setStarted(true);
+    }
+  }, [room?.status, started]);
+
   useEffect(() => {
     if (startRef.current === 0 && input.length > 0) startRef.current = Date.now();
   }, [input]);
 
-  const finishPara = useCallback((text: string) => {
-    const correct = text.split("").filter((c, i) => c === text[i]).length;
+  const finishPara = useCallback((text: string, currentInput: string) => {
+    const correct = currentInput.split("").filter((c, i) => c === text[i]).length;
     setCorrect((p) => p + correct);
 
     if (room?.docId && user) {
@@ -253,12 +320,31 @@ function MultiplayerMarathon({ room, onExit }: { room: Room | null; onExit: () =
         )}
       </p>
 
+      {matchResult && (
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+          className="mt-3 rounded-2xl bg-nested p-4 text-center">
+          <p className="font-extrabold text-[16px]">
+            {matchResult.won ? "You won!" : "Opponent wins!"}
+          </p>
+          <div className="mt-2 flex items-center justify-center gap-3">
+            <span className={`flex items-center gap-1 font-bold text-[15px] ${matchResult.pts >= 0 ? "text-brand" : "text-rose"}`}>
+              {matchResult.pts >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+              {matchResult.pts >= 0 ? "+" : ""}{matchResult.pts} pts
+            </span>
+            <span className="text-muted text-[13px]">·</span>
+            <span className="font-bold text-[13px]" style={{ color: getRankData(matchResult.rank.rank).color }}>
+              {getRankData(matchResult.rank.rank).icon} {getRankData(matchResult.rank.rank).label} — {matchResult.rank.points} pts
+            </span>
+          </div>
+        </motion.div>
+      )}
+
       {!done && (
         <input autoFocus value={input} onChange={(e) => {
           const val = e.target.value;
           if (val.length > para.length) return;
           setInput(val);
-          if (val.length === para.length) finishPara(para);
+          if (val.length === para.length) finishPara(para, val);
         }} placeholder="Type this paragraph…"
           className="mt-3 w-full rounded-full border border-hairline bg-paper px-5 py-3 font-mono outline-none focus:border-ink" />
       )}

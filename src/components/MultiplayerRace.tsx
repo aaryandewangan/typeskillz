@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Trophy, Zap, ArrowLeft } from "lucide-react";
+import { Trophy, Zap, ArrowLeft, TrendingUp, TrendingDown } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import {
   listenToRoom,
@@ -11,6 +11,7 @@ import {
   type Room,
   type RoomPlayer,
 } from "@/lib/firebase-store";
+import { recordMatchResult, getRankData, calculatePointsChange, type GameRank } from "@/lib/rank-store";
 
 const PLAYER_COLORS = ["#0aa63f", "#5f58e8", "#ff8709", "#e535ab", "#8b5cf6"];
 
@@ -46,11 +47,9 @@ export default function MultiplayerRace({ text, docId, onExit }: Props) {
 
   useEffect(() => {
     return () => {
-      if (room?.host.uid === user?.uid) {
-        deleteRoom(docId).catch(() => {});
-      }
+      unsubRef.current?.();
     };
-  }, [docId, room?.host.uid, user?.uid]);
+  }, []);
 
   useEffect(() => {
     if (!started) return;
@@ -59,10 +58,29 @@ export default function MultiplayerRace({ text, docId, onExit }: Props) {
   }, [started]);
 
   const done = input.length >= text.length;
-  const elapsedMs = started ? (done ? 0 : now - t0) : 0;
-  const elapsedSec = Math.max(0.5, elapsedMs / 1000);
   const correct = input.split("").filter((c, i) => c === text[i]).length;
-  const myWpm = started ? Math.round(correct / 5 / (elapsedSec / 60)) : 0;
+  const [finishMs, setFinishMs] = useState(0);
+  const lastWpmRef = useRef(0);
+
+  useEffect(() => {
+    if (done && t0 > 0 && finishMs === 0) {
+      setFinishMs(Date.now());
+    }
+  }, [done, t0, finishMs]);
+
+  const elapsedMs = started
+    ? (done ? (finishMs > 0 ? finishMs - t0 : now - t0) : now - t0)
+    : 0;
+  const elapsedSec = Math.max(0.5, elapsedMs / 1000);
+  const myWpm = started && elapsedSec > 0 ? Math.round(correct / 5 / (elapsedSec / 60)) : 0;
+
+  useEffect(() => {
+    if (done && myWpm > 0) {
+      lastWpmRef.current = myWpm;
+    }
+  }, [done, myWpm]);
+
+  const displayWpm = done ? lastWpmRef.current : myWpm;
   const myProg = Math.min(100, (input.length / text.length) * 100);
 
   const me = room?.players.find((p) => p.uid === user?.uid);
@@ -71,12 +89,32 @@ export default function MultiplayerRace({ text, docId, onExit }: Props) {
   useEffect(() => {
     if (!started || !user) return;
     const prog = Math.min(100, (input.length / text.length) * 100);
-    updatePlayerProgress(docId, user.uid, prog, myWpm, done).catch(() => {});
-  }, [input, started, user, docId, myWpm, done, text.length]);
+    updatePlayerProgress(docId, user.uid, prog, displayWpm, done).catch(() => {});
+  }, [input, started, user, docId, displayWpm, done, text.length]);
 
   const winner = room?.winner;
   const iWon = winner === user?.uid;
   const gameOver = room?.status === "finished";
+
+  const [matchResult, setMatchResult] = useState<{ won: boolean; pts: number; rank: GameRank } | null>(null);
+  const matchRecordedRef = useRef(false);
+
+  useEffect(() => {
+    if (!gameOver || !user || !room || matchRecordedRef.current) return;
+    matchRecordedRef.current = true;
+
+    const opponents = room.players.filter((p) => p.uid !== user.uid);
+    const winnerUid = room.winner;
+
+    if (opponents.length > 0) {
+      const opp = opponents[0];
+      const won = winnerUid === user.uid;
+      recordMatchResult(user.uid, (room.mode || "race") + "_online", won, opp.uid).then((rank) => {
+        const pts = calculatePointsChange(rank.rank, getRankData(rank.rank).id, won);
+        setMatchResult({ won, pts, rank });
+      }).catch(() => {});
+    }
+  }, [gameOver, user, room]);
 
   return (
     <div className="rounded-[24px] border border-hairline bg-white p-6 shadow-card">
@@ -96,7 +134,7 @@ export default function MultiplayerRace({ text, docId, onExit }: Props) {
       <div className="space-y-2.5 font-mono text-[13px]">
         <div>
           <div className="flex justify-between font-sans font-bold text-[13px]">
-            <span>You {started && <span className="font-mono text-muted">{myWpm} wpm</span>}</span>
+            <span>You {started && <span className="font-mono text-muted">{displayWpm} wpm</span>}</span>
             <span>{Math.round(myProg)}%</span>
           </div>
           <div className="h-3 rounded-full bg-nested overflow-hidden">
@@ -148,6 +186,18 @@ export default function MultiplayerRace({ text, docId, onExit }: Props) {
           <p className="text-[14px] text-muted mt-1">
             {room?.players.map((p) => `${p.name}: ${p.wpm} wpm`).join(" · ")}
           </p>
+          {matchResult && (
+            <div className="mt-3 flex items-center justify-center gap-3">
+              <span className={`flex items-center gap-1 font-bold text-[15px] ${matchResult.pts >= 0 ? "text-brand" : "text-rose"}`}>
+                {matchResult.pts >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                {matchResult.pts >= 0 ? "+" : ""}{matchResult.pts} pts
+              </span>
+              <span className="text-muted text-[13px]">·</span>
+              <span className="font-bold text-[13px]" style={{ color: getRankData(matchResult.rank.rank).color }}>
+                {getRankData(matchResult.rank.rank).icon} {getRankData(matchResult.rank.rank).label} — {matchResult.rank.points} pts
+              </span>
+            </div>
+          )}
           <button onClick={onExit} className="pill-btn mt-3 bg-ink text-cream px-5 py-2.5 font-bold">
             Back to games
           </button>

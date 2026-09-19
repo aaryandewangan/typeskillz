@@ -26,6 +26,7 @@ import {
   listenToRoom,
   togglePlayerReady,
   startCountdown,
+  setRoomRacing,
   leaveRoom,
   type Room,
 } from "@/lib/firebase-store";
@@ -66,6 +67,7 @@ type Step =
   | "friends-join"
   | "friends-create"
   | "online-waiting"
+  | "online-starting"
   | "lobby";
 
 export default function GameModeSelector({ game, color, onSelect }: GameModeSelectorProps) {
@@ -103,19 +105,29 @@ export default function GameModeSelector({ game, color, onSelect }: GameModeSele
         const elapsed = Date.now() - r.countdownStart;
         const remaining = Math.max(0, 3 - Math.floor(elapsed / 1000));
         setCountdown(remaining);
-        if (remaining === 0) {
-          onSelect("friends", "", docId);
+        if (remaining === 0 && r.host.uid === user?.uid) {
+          setRoomRacing(docId).catch(() => {});
         }
       }
-      if (r?.status === "racing" || r?.status === "finished") {
+      if (r?.status === "racing") {
+        onSelect("friends", "", docId);
+      }
+      if (r?.status === "finished") {
         onSelect("friends", "", docId);
       }
     });
     return () => { unsubRoomRef.current?.(); };
-  }, [docId, step, onSelect]);
+  }, [docId, step, onSelect, user?.uid]);
 
   const isHost = room?.host.uid === user?.uid;
   const allReady = room ? room.players.every((p) => p.ready) && room.players.length >= 2 : false;
+
+  // Auto-start countdown for online matches when room is full
+  useEffect(() => {
+    if (step === "online-starting" && room && room.status === "lobby" && room.players.length >= room.maxPlayers) {
+      startCountdown(docId).catch(() => {});
+    }
+  }, [step, room, docId]);
 
   // ── Bot ──
   const handleBot = useCallback(() => {
@@ -143,14 +155,14 @@ export default function GameModeSelector({ game, color, onSelect }: GameModeSele
         if (rid) {
           unsubMatchRef.current?.();
           setDocId(rid);
-          setStep("lobby");
+          setStep("online-starting");
         }
       });
     } catch {
       setError("Matchmaking failed. Try again.");
       setStep("online-size");
     }
-  }, [user, game, onSelect]);
+  }, [user, game]);
 
   const cancelSearch = useCallback(() => {
     if (user) leaveMatchmaking(user.uid, game).catch(() => {});
@@ -299,6 +311,23 @@ export default function GameModeSelector({ game, color, onSelect }: GameModeSele
               className="mt-4 pill-btn flex items-center gap-2 mx-auto border border-hairline bg-white px-5 py-2.5 text-[13px] font-bold">
               <X size={14} /> Cancel
             </button>
+          </motion.div>
+        )}
+
+        {/* ── Online: matched, starting ── */}
+        {step === "online-starting" && docId && (
+          <motion.div key="online-starting" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-center py-6">
+            <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl mb-4" style={{ background: bg }}>
+              <UserCheck size={24} style={{ color }} />
+            </div>
+            <p className="text-[18px] font-extrabold">Match found!</p>
+            <p className="text-[14px] text-muted mt-1">Starting game…</p>
+            {room?.status === "countdown" && (
+              <motion.p key={countdown} initial={{ scale: 2, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                className="mt-4 text-[80px] font-black" style={{ color }}>
+                {countdown > 0 ? countdown : "GO!"}
+              </motion.p>
+            )}
           </motion.div>
         )}
 

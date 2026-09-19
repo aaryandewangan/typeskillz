@@ -122,15 +122,26 @@ export default function AuthModal({
     setLoading(true);
     try {
       const cred = await signInWithGoogle();
-      // Check if this Google user already has a username
       const { getUsername } = await import("@/lib/firebase-store");
       const existing = await getUsername(cred.user.uid);
       if (!existing) {
-        // First time Google sign-in — create profile with email prefix as display
-        const fallbackName = cred.user.email?.split("@")[0] ?? "player";
-        await claimUsername(cred.user.uid, fallbackName);
+        const baseName = cred.user.email?.split("@")[0]?.toLowerCase().replace(/[^a-z0-9_]/g, "") ?? "player";
+        let username = baseName;
+        if (username.length < 3) username = username + "pro";
+        let claimed = await claimUsername(cred.user.uid, username);
+        if (!claimed) {
+          for (let i = 1; i <= 99; i++) {
+            const attempt = `${baseName}${i}`;
+            if (attempt.length >= 3 && await claimUsername(cred.user.uid, attempt)) {
+              username = attempt;
+              claimed = true;
+              break;
+            }
+          }
+        }
+        if (!claimed) username = cred.user.uid.slice(0, 8);
         await createProfile(cred.user.uid, {
-          displayName: fallbackName,
+          displayName: username,
           email: cred.user.email ?? "",
           goal: 60,
           layout: "qwerty",
@@ -140,7 +151,7 @@ export default function AuthModal({
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Google sign-in failed";
-      setError(msg);
+      setError(msg.includes("auth/") ? msg.split("auth/")[1].replace(/-/g, " ") : msg);
     } finally {
       setLoading(false);
     }

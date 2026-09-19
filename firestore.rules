@@ -2,31 +2,87 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    /* ── Users ─────────────────────────────────────────────────────── */
     match /users/{uid} {
       allow read: if true;
-      allow create: if request.auth != null && request.auth.uid == uid;
-      allow update: if request.auth != null && request.auth.uid == uid;
-      allow delete: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null
+                    && request.auth.uid == uid
+                    && isvalidUserCreate();
+      allow update: if request.auth != null
+                    && request.auth.uid == uid
+                    && isvalidUserUpdate();
+      allow delete: if request.auth != null
+                    && request.auth.uid == uid;
+
+      function isvalidUserCreate() {
+        let d = request.resource.data;
+        return d.keys().hasAll(['uid', 'displayName', 'email', 'goal', 'layout', 'createdAt'])
+               && d.uid == uid
+               && d.displayName is string
+               && d.displayName.size() >= 1
+               && d.displayName.size() <= 30
+               && d.email is string
+               && d.goal is int
+               && d.goal >= 15
+               && d.goal <= 200
+               && d.layout is string
+               && d.layout.size() <= 20
+               && d.createdAt is string;
+      }
+
+      function isvalidUserUpdate() {
+        let d = request.resource.data;
+        let old = resource.data;
+        return d.uid == old.uid
+               && d.createdAt == old.createdAt
+               && d.displayName is string
+               && d.displayName.size() >= 1
+               && d.displayName.size() <= 30
+               && d.email is string
+               && d.goal is int
+               && d.goal >= 15
+               && d.goal <= 200
+               && d.layout is string
+               && d.layout.size() <= 20;
+      }
     }
 
+    /* ── Usernames ─────────────────────────────────────────────────── */
     match /usernames/{username} {
       allow read: if true;
       allow create: if request.auth != null
-                    && request.resource.data.uid == request.auth.uid;
+                    && request.resource.data.uid == request.auth.uid
+                    && isValidUsername(username);
       allow delete: if request.auth != null
                     && resource.data.uid == request.auth.uid;
       allow update: if false;
+
+      function isValidUsername(name) {
+        return name.size() >= 3
+               && name.size() <= 20
+               && name.matches('^[a-z0-9_]+$');
+      }
     }
 
+    /* ── Rooms (multiplayer) ───────────────────────────────────────── */
     match /rooms/{roomId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null
-                    && request.resource.data.host.uid == request.auth.uid;
+                    && request.resource.data.host.uid == request.auth.uid
+                    && isValidRoomCreate();
       allow update: if request.auth != null
-                    && (resource.data.host.uid == request.auth.uid
-                        || request.auth.uid in getPlayersUids(resource.data.players));
+                    && (isHost() || isPlayerInRoom())
+                    && isValidRoomUpdate();
       allow delete: if request.auth != null
-                    && resource.data.host.uid == request.auth.uid;
+                    && isHost();
+
+      function isHost() {
+        return resource.data.host.uid == request.auth.uid;
+      }
+
+      function isPlayerInRoom() {
+        return request.auth.uid in getPlayersUids(resource.data.players);
+      }
 
       function getPlayersUids(players) {
         return [
@@ -37,14 +93,106 @@ service cloud.firestore {
           players[4].uid
         ];
       }
+
+      function isValidRoomCreate() {
+        let d = request.resource.data;
+        return d.code is string
+               && d.code.size() == 6
+               && d.players.size() >= 1
+               && d.players.size() <= 5
+               && d.maxPlayers is int
+               && d.maxPlayers >= 2
+               && d.maxPlayers <= 5
+               && d.status == "lobby"
+               && d.text is string
+               && d.text.size() <= 500
+               && d.mode is string
+               && d.mode.size() <= 30
+               && d.createdAt is string;
+      }
+
+      function isValidRoomUpdate() {
+        let d = request.resource.data;
+        let old = resource.data;
+        return d.players.size() >= 1
+               && d.players.size() <= 5
+               && d.maxPlayers == old.maxPlayers
+               && d.code == old.code
+               && d.text == old.text
+               && d.mode == old.mode
+               && d.createdAt == old.createdAt
+               && d.status in ["lobby", "countdown", "racing", "finished"];
+      }
     }
 
+    /* ── Matchmaking ────────────────────────────────────────────────── */
     match /matchmaking/{ticketId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null
-                    && request.resource.data.uid == request.auth.uid;
+                    && request.resource.data.uid == request.auth.uid
+                    && isValidTicketCreate();
       allow update: if request.auth != null;
       allow delete: if request.auth != null;
+
+      function isValidTicketCreate() {
+        let d = request.resource.data;
+        return d.name is string
+               && d.name.size() >= 1
+               && d.name.size() <= 30
+               && d.game is string
+               && d.game.size() <= 30
+               && d.size is int
+               && d.size >= 2
+               && d.size <= 5
+               && d.status == "queuing"
+               && d.createdAt is string;
+      }
+    }
+
+    /* ── Game Ranks (competitive ranking) ───────────────────────────── */
+    match /gameRanks/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid
+                    && isValidRankCreate();
+      allow update: if request.auth != null
+                    && resource.data.uid == request.auth.uid
+                    && isValidRankUpdate();
+      allow delete: if false;
+
+      function isValidRankCreate() {
+        let d = request.resource.data;
+        return d.game is string
+               && d.game.size() <= 30
+               && d.points == 0
+               && d.wins == 0
+               && d.losses == 0
+               && d.placementMatches == 0
+               && d.placementDone == false
+               && d.rank == "bronze"
+               && d.season is int
+               && d.season >= 1
+               && d.updatedAt is string;
+      }
+
+      function isValidRankUpdate() {
+        let d = request.resource.data;
+        let old = resource.data;
+        return d.game == old.game
+               && d.season == old.season
+               && d.points >= 0
+               && d.points <= old.points + 50
+               && d.wins >= old.wins
+               && d.wins <= old.wins + 1
+               && d.losses >= old.losses
+               && d.losses <= old.losses + 1
+               && d.placementMatches >= old.placementMatches
+               && d.placementMatches <= old.placementMatches + 1
+               && d.placementDone == old.placementDone
+                        || (old.placementDone == false
+                            && d.placementMatches >= 3)
+               && d.updatedAt is string;
+      }
     }
   }
 }
